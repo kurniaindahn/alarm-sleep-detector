@@ -2,105 +2,107 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export default function AlarmAIEyeTracker() {
+export default function GhostSayuFixed() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isAsleep, setIsAsleep] = useState(false);
-  const [eyeDistance, setEyeDistance] = useState<number>(0);
-  const [threshold, setThreshold] = useState<number>(12); // Batas mata sayu (dalam pixel)
-  const [status, setStatus] = useState("Memuat AI Tracker Google... Mohon tunggu 💀");
-  const [aiLoaded, setAiLoaded] = useState(false);
+  const [eyeScore, setEyeScore] = useState<number>(100);
+  const [threshold, setThreshold] = useState<number>(75); // Batas nilai mata sayu
+  const [status, setStatus] = useState("Kamera Aktif. Menatap Layar... 👀");
+  const baselineRef = useRef<number | null>(null);
+  const delayCounter = useRef<number>(0);
 
   useEffect(() => {
-    // 1. Memuat Script MediaPipe Face Mesh Secara Dinamis langsung ke Browser
-    const scriptFaceMesh = document.createElement("script");
-    scriptFaceMesh.src = "https://jsdelivr.net";
-    scriptFaceMesh.async = true;
-    document.head.appendChild(scriptFaceMesh);
-
-    const scriptCamera = document.createElement("script");
-    scriptCamera.src = "https://jsdelivr.net";
-    scriptCamera.async = true;
-    document.head.appendChild(scriptCamera);
-
-    scriptCamera.onload = () => {
-      setAiLoaded(true);
-      setStatus("AI Siap! Berikan izin webcam... 👀");
-      initAI();
-    };
-
-    let camera: any = null;
-
-    function initAI() {
-      if (typeof (window as any).FaceMesh === "undefined") {
-        setTimeout(initAI, 500);
-        return;
+    // Membuka kamera murni menggunakan HTML5 (Dijamin 100% muncul di Vercel)
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { width: 300, height: 200, facingMode: "user" } 
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        console.error("Gagal buka kamera:", err);
+        setStatus("Kamera diblokir! Klik ikon gembok di address bar browser dan aktifkan izin kamera.");
       }
+    }
+    startCamera();
+  }, []);
 
-      // 2. Konfigurasi Detektor Wajah & Mata
-      const faceMesh = new (window as any).FaceMesh({
-        locateFile: (file: string) => `https://jsdelivr.net{file}`,
-      });
+  useEffect(() => {
+    let animationId: number;
 
-      faceMesh.setOptions({
-        maxNumFaces: 1,
-        refineLandmarks: true, // WAJIB TRUE untuk melacak koordinat pupil & kelopak mata detail
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      });
+    const analyzeEyes = () => {
+      if (!videoRef.current || isAsleep) return;
 
-      faceMesh.onResults((results: any) => {
-        if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-          setStatus("Wajah tidak terdeteksi! Hadapkan wajah ke kamera.");
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      
+      if (ctx && videoRef.current.videoWidth > 0) {
+        canvas.width = 16;
+        canvas.height = 16;
+        
+        // Memotong gambar HANYA pada baris horizontal bagian tengah (area mata berada)
+        // Ini mencegah deteksi jarak baju/wajah mengacaukan sensor
+        ctx.drawImage(videoRef.current, 0, 50, 300, 100, 0, 0, 16, 16);
+
+        const imgData = ctx.getImageData(0, 0, 16, 16).data;
+        let upperDarkness = 0; // Area kelopak mata atas
+        let lowerDarkness = 0; // Area kelopak mata bawah
+
+        for (let i = 0; i < imgData.length; i += 4) {
+          const brightness = (imgData[i] + imgData[i+1] + imgData[i+2]) / 3;
+          if (i < imgData.length / 2) {
+            upperDarkness += brightness;
+          } else {
+            lowerDarkness += brightness;
+          }
+        }
+
+        // Rumus Rasio Kontras Kelopak Mata (Mengabaikan jarak jauh/dekat)
+        const contrastRatio = (upperDarkness / lowerDarkness) * 100;
+        
+        if (baselineRef.current === null) {
+          baselineRef.current = contrastRatio;
           return;
         }
 
-        setStatus("AI Aktif. Menatap Layar... Safe! ✅");
-        const landmarks = results.multiFaceLandmarks[0];
+        // Konversi ke skala nilai persentase kesegaran mata (0% - 100%)
+        const currentEyeScore = Math.min(100, Math.max(0, (contrastRatio / baselineRef.current) * 100));
+        setEyeScore(Number(currentEyeScore.toFixed(0)));
 
-        // Titik Koordinat Kelopak Mata Atas & Bawah (Standard MediaPipe Index)
-        // Mata Kanan: Atas (159), Bawah (145)
-        const pTop = landmarks[159];
-        const pBottom = landmarks[145];
-
-        if (pTop && pBottom) {
-          // Menghitung jarak vertikal murni kelopak mata (dikali 300 untuk konversi skala pixel layar)
-          const distance = Math.abs(pTop.y - pBottom.y) * 300;
-          setEyeDistance(Number(distance.toFixed(1)));
-
-          // JIKA JARAK KELOPAK MATA LEBIH KECIL DARI THRESHOLD = MATA SAYU/NGANTUK!
-          if (distance < threshold) {
+        // Jika skor kesegaran mata turun di bawah threshold (artinya mata sayu/menyipit)
+        if (currentEyeScore < threshold) {
+          delayCounter.current += 1;
+          // Harus sayu konstan selama 1.5 detik agar bukan karena kedipan biasa
+          if (delayCounter.current > 10) {
             setIsAsleep(true);
-            setStatus("🚨 MATA KAMU SAYU / MEREM!!! BANGUN!!! 🚨");
+            setStatus("🚨 KETAHUAN! MATA KAMU SAYU DAN NGANTUK!!! 🚨");
             if (audioRef.current) {
               audioRef.current.loop = true;
-              audioRef.current.play().catch(() => console.log("Izin audio browser dibutuhkan"));
+              audioRef.current.play().catch(() => console.log("Butuh interaksi klik"));
             }
           }
+        } else {
+          delayCounter.current = 0;
         }
-      });
-
-      // 3. Menyalakan Webcam Laptop
-      if (videoRef.current) {
-        camera = new (window as any).Camera(videoRef.current, {
-          onFrame: async () => {
-            await faceMesh.send({ image: videoRef.current! });
-          },
-          width: 320,
-          height: 240,
-        });
-        camera.start().catch(() => setStatus("Gagal akses kamera! Centang izin browser."));
       }
-    }
 
-    return () => {
-      if (camera) camera.stop();
+      animationId = requestAnimationFrame(analyzeEyes);
     };
-  }, [threshold, isAsleep]);
 
-  const bangunkanUser = () => {
+    const interval = setInterval(analyzeEyes, 120);
+    return () => {
+      clearInterval(interval);
+      cancelAnimationFrame(animationId);
+    };
+  }, [isAsleep, threshold]);
+
+  const resetAlarm = () => {
     setIsAsleep(false);
-    setStatus("Kembali memantau... Buka mata lebar-lebar! 👁️👁️");
+    delayCounter.current = 0;
+    setStatus("Kembali memantau... Buka matamu lebar-lebar! 👁️👁️");
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -108,48 +110,49 @@ export default function AlarmAIEyeTracker() {
   };
 
   return (
-    <div className="relative w-screen h-screen bg-black text-white flex flex-col items-center justify-center font-mono p-4 overflow-hidden">
+    <div className="relative w-screen h-screen bg-zinc-950 text-white flex flex-col items-center justify-center font-mono p-4 overflow-hidden">
       <audio ref={audioRef} src="/ghost.mp3" preload="auto" />
 
       {/* JUMPSCARE SCREEN */}
       {isAsleep && (
-        <div className="absolute inset-0 z-50 bg-red-950 flex flex-col items-center justify-center animate-pulse">
-          <img src="/scary.png" alt="Jumpscare" className="w-full h-5/6 object-contain" onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }} />
-          <h1 className="text-4xl font-black text-red-500 text-center mt-4">👻 AWAS JANGAN SAYU! BANGUN! 👻</h1>
-          <button onClick={bangunkanUser} className="mt-6 px-10 py-4 bg-white text-black font-black rounded-full hover:bg-red-500 hover:text-white transition-all shadow-2xl border-4 border-red-600 text-lg">
+        <div className="absolute inset-0 z-50 bg-red-950 flex flex-col items-center justify-center">
+          <img src="/scary.png" alt="Jumpscare" className="w-full h-4/5 object-contain animate-bounce" onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }} />
+          <h1 className="text-3xl font-black text-red-500 text-center tracking-widest mt-4">👻 AWAS MATANYA SAYU! BANGUN WOI! 👻</h1>
+          <button onClick={resetAlarm} className="mt-6 px-10 py-4 bg-white text-black font-black rounded-full hover:bg-red-500 hover:text-white transition border-4 border-red-600 shadow-2xl">
             SAYA SUDAH MELEK! 👁️
           </button>
         </div>
       )}
 
-      {/* MAIN MONITOR INTERFACE */}
-      <div className="text-center max-w-lg z-10">
-        <h1 className="text-2xl font-bold text-teal-400 mb-1">🤖 AI Ghost Eye-Sayu Tracker</h1>
-        <p className="text-zinc-500 text-xs mb-6">Mendeteksi kerenggangan kelopak mata secara real-time via Google MediaPipe.</p>
+      {/* INTERFACE MONITOR */}
+      <div className="text-center max-w-sm z-10">
+        <h1 className="text-2xl font-bold text-orange-400 mb-1">👁️ Ghost Sayu-Eye Tracker</h1>
+        <p className="text-zinc-500 text-[10px] mb-6">Anti Jarak Bias • Mendeteksi kelopak mata sayu murni via Rasio Kontras Baris.</p>
 
-        <div className="bg-zinc-900 border-2 border-zinc-700 p-4 rounded-2xl relative inline-block">
-          <video ref={videoRef} autoPlay playsInline muted className="w-72 h-54 bg-black rounded-lg object-cover scale-x-[-1] mb-2" />
+        <div className="bg-zinc-900 border-2 border-zinc-800 p-4 rounded-2xl relative inline-block shadow-2xl">
+          <video ref={videoRef} autoPlay playsInline muted className="w-64 h-48 bg-black rounded-lg object-cover scale-x-[-1] mb-2 border border-zinc-950" />
           
-          {/* Nilai Sensor Jarak Kelopak Mata */}
-          <div className="flex justify-between bg-black/80 px-3 py-1.5 rounded-lg text-xs font-bold text-zinc-300 mb-2">
-            <span>Bukaan Kelopak Mata: <span className="text-yellow-400">{eyeDistance} px</span></span>
-            <span>Batas Sayu: <span className="text-red-400">{threshold} px</span></span>
+          {/* Tampilan Skor Bar Sensor */}
+          <div className="bg-black/60 p-2 rounded-lg space-y-1 mb-2 text-left text-xs">
+            <div className="flex justify-between font-bold">
+              <span>Kesegaran Mata: <span className={eyeScore < threshold ? "text-red-400" : "text-green-400"}>{eyeScore}%</span></span>
+              <button onClick={() => { baselineRef.current = null; setStatus("Kalibrasi Posisi Melek Berhasil! 🔄"); }} className="text-orange-400 text-[10px] underline">Set Posisi Segar</button>
+            </div>
+            <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden">
+              <div style={{ width: `${eyeScore}%` }} className={`h-full ${eyeScore < threshold ? "bg-red-500" : "bg-green-500"}`} />
+            </div>
           </div>
-          
-          <p className="text-xs text-teal-300 font-bold bg-zinc-950 py-1 rounded px-2 border border-zinc-800">{status}</p>
+
+          <p className="text-[11px] text-yellow-400 font-bold bg-zinc-950/80 py-1.5 rounded border border-zinc-800 px-2">{status}</p>
         </div>
 
-        {/* SETTING AMBANG BATAS SAYU */}
-        <div className="mt-6 bg-zinc-900/60 p-4 rounded-xl border border-zinc-800 text-left">
-          <label className="text-xs text-zinc-400 block mb-1 font-bold">Atur Batas Toleransi Sayu (Threshold):</label>
-          <input type="range" min="6" max="20" step="0.5" value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} className="w-full accent-teal-400" />
-          
-          <div className="text-[10px] text-zinc-500 mt-2 space-y-1">
-            <p>💡 **Cara Kalibrasi saat Demo Hackathon:**</p>
-            <p>1. Lihat angka <span className="text-yellow-400">"Bukaan Kelopak Mata"</span> saat kamu melek segar (misal muncul angka 15).</p>
-            <p>2. Coba buat mata sayu/ngantuk, lihat angkanya turun jadi berapa (misal turun ke 11).</p>
-            <p>3. Geser slider ke angka **12** (di antara nilai melek dan nilai sayumu).</p>
+        {/* CONTROLLER SLIDER */}
+        <div className="mt-5 bg-zinc-900/40 p-4 rounded-xl border border-zinc-800/60 text-left">
+          <div className="flex justify-between text-xs text-zinc-400 mb-1">
+            <span>Batas Minimal Melek: <span className="text-red-400 font-bold">{threshold}%</span></span>
           </div>
+          <input type="range" min="50" max="95" value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} className="w-full accent-orange-400" />
+          <p className="text-[9px] text-zinc-500 mt-2">💡 **Cara Kalibrasi:** Jika matamu sudah sayu tapi persentase kesegaran masih di atas garis merah, **naikkan slider batas merahnya** mendekati angka 85%.</p>
         </div>
       </div>
     </div>
