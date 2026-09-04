@@ -2,84 +2,92 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export default function AlarmSleepDetector() {
+export default function AlarmSayuDetector() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isAsleep, setIsAsleep] = useState(false);
-  const [sensitivity, setSensitivity] = useState(60); // Ambang batas deteksi ngantuk
-  const lastBrightnessRef = useRef<number | null>(null);
-  const [status, setStatus] = useState("Kamera Aktif. Jangan Tidur... 💀");
+  const [sensitivity, setSensitivity] = useState(25); // Standar sensitivitas mata sayu
+  const [status, setStatus] = useState("Kamera Aktif. Menatap Layar... 👀");
+  const baseBrightnessRef = useRef<number | null>(null);
+  const consecutiveSayuCount = useRef<number>(0);
 
   useEffect(() => {
-    // 1. Meminta izin akses webcam di browser
     async function initCamera() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 400, height: 300 } });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
         if (videoRef.current) videoRef.current.srcObject = stream;
       } catch (err) {
-        console.error("Webcam diblokir!", err);
-        setStatus("Gagal Akses Kamera! Berikan izin webcam di browser.");
+        console.error("Gagal akses kamera:", err);
+        setStatus("Gagal Akses Kamera! Berikan izin di browser.");
       }
     }
     initCamera();
   }, []);
 
-  // 2. Fungsi deteksi mata menyipit / kepala tertunduk (Ngantuk)
   useEffect(() => {
     let animationId: number;
 
-    const trackDrowsiness = () => {
-      if (!videoRef.current || isAsleep) {
-        animationId = requestAnimationFrame(trackDrowsiness);
-        return;
-      }
+    const trackSayuEyes = () => {
+      if (!videoRef.current || isAsleep) return;
 
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
       if (ctx && videoRef.current.videoWidth > 0) {
-        canvas.width = 20;
-        canvas.height = 20;
-        ctx.drawImage(videoRef.current, 0, 0, 20, 20);
+        // Perkecil grid analisis ke 8x8 pixel tepat di area tengah (fokus ke area mata/wajah)
+        canvas.width = 8;
+        canvas.height = 8;
+        ctx.drawImage(videoRef.current, 2, 2, 4, 4, 0, 0, 8, 8);
 
-        const imgData = ctx.getImageData(0, 0, 20, 20).data;
-        let brightnessTotal = 0;
+        const imgData = ctx.getImageData(0, 0, 8, 8).data;
+        let currentBrightness = 0;
 
-        // Membaca intensitas cahaya dari pixel wajah
+        // Hitung kecerahan rata-rata dari grid wajah
         for (let i = 0; i < imgData.length; i += 4) {
-          brightnessTotal += (imgData[i] + imgData[i + 1] + imgData[i + 2]) / 3;
+          currentBrightness += (imgData[i] + imgData[i + 1] + imgData[i + 2]) / 3;
         }
-        const avgBrightness = brightnessTotal / 400;
+        currentBrightness = currentBrightness / 64;
 
-        if (lastBrightnessRef.current !== null) {
-          const change = lastBrightnessRef.current - avgBrightness;
+        // Ambil data kecerahan awal saat pengguna pertama kali melek sebagai acuan dasar (Baseline)
+        if (baseBrightnessRef.current === null) {
+          baseBrightnessRef.current = currentBrightness;
+          return;
+        }
 
-          // Jika mata tertutup lama atau kepala menunduk, tingkat kecerahan pixel wajah drop drastis
-          if (change > sensitivity) {
+        // Jika mata menyipit/sayu, bayangan kelopak mata membuat nilai kecerahan drop dari kondisi melek dasar
+        const brightnessDrop = baseBrightnessRef.current - currentBrightness;
+
+        if (brightnessDrop > sensitivity) {
+          consecutiveSayuCount.current += 1;
+          // Jika mata terdeteksi sayu berturut-turut selama ~1.5 detik (menghindari kedipan normal)
+          if (consecutiveSayuCount.current > 8) {
             setIsAsleep(true);
-            setStatus("🚨 KAMU KETAHUAN NGANTUK!!! 🚨");
+            setStatus("🚨 MATA KAMU SAYU / NGANTUK!!! 🚨");
             if (audioRef.current) {
               audioRef.current.loop = true;
-              audioRef.current.play().catch(e => console.log("Izin audio browser dibutuhkan"));
+              audioRef.current.play().catch(() => console.log("Butuh klik user untuk audio"));
             }
           }
+        } else {
+          // Jika mata kembali segar/melek, reset hitungan sayu
+          consecutiveSayuCount.current = 0;
+          // Adaptasi perlahan terhadap perubahan cahaya ruangan yang alami
+          baseBrightnessRef.current = baseBrightnessRef.current * 0.95 + currentBrightness * 0.05;
         }
-        lastBrightnessRef.current = avgBrightness;
       }
-
-      animationId = requestAnimationFrame(trackDrowsiness);
+      animationId = requestAnimationFrame(trackSayuEyes);
     };
 
-    const interval = setInterval(trackDrowsiness, 100);
+    const interval = setInterval(trackSayuEyes, 150);
     return () => {
       clearInterval(interval);
       cancelAnimationFrame(animationId);
     };
   }, [isAsleep, sensitivity]);
 
-  // Fungsi untuk mematikan hantu dan mereset sistem
   const bangunkanUser = () => {
     setIsAsleep(false);
-    setStatus("Sistem kembali memantau... Jangan merem lagi! 👁️👁️");
+    consecutiveSayuCount.current = 0;
+    setStatus("Kembali memantau... Buka mata lebar-lebar! 👁️👁️");
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -88,58 +96,34 @@ export default function AlarmSleepDetector() {
 
   return (
     <div className="relative w-screen h-screen bg-black text-white flex flex-col items-center justify-center font-mono p-4 overflow-hidden">
-      
-      {/* Audio Element Tersembunyi untuk Suara Hantu */}
       <audio ref={audioRef} src="/ghost.mp3" preload="auto" />
 
-      {/* TAMPILAN JUMPSCARE HANTU SAAT USER NGANTUK */}
       {isAsleep && (
-        <div className="absolute inset-0 z-50 bg-red-950 flex flex-col items-center justify-center animate-ping-once">
-          <img 
-            src="/scary.png" 
-            alt="Jumpscare Hantu" 
-            className="w-full h-5/6 object-contain animate-bounce"
-            onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }} 
-          />
-          <h1 className="text-5xl font-black text-red-500 tracking-widest text-center animate-pulse mt-4">
-            👻 BANGUN WOI!!! HAHAHAHA! 👻
-          </h1>
-          <button 
-            onClick={bangunkanUser}
-            className="mt-6 px-8 py-4 bg-white text-black font-extrabold text-xl rounded-full hover:bg-red-500 hover:text-white transition shadow-lg border-4 border-red-600 animate-pulse"
-          >
-            SAYA SUDAH BANGUN! (Ampun) 🙏
-          </button>
+        <div className="absolute inset-0 z-50 bg-red-950 flex flex-col items-center justify-center">
+          <img src="/scary.png" alt="Jumpscare" className="w-full h-5/6 object-contain animate-bounce" onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }} />
+          <h1 className="text-4xl font-black text-red-500 text-center animate-pulse mt-4">👻 AWAS JANGAN SAYU! BANGUN! 👻</h1>
+          <button onClick={bangunkanUser} className="mt-6 px-8 py-3 bg-white text-black font-extrabold rounded-full hover:bg-red-500 hover:text-white transition shadow-lg border-4 border-red-600">Saya Sudah Melek! 👁️</button>
         </div>
       )}
 
-      {/* TAMPILAN MONITORING UTAMA */}
       <div className="text-center max-w-lg z-10">
-        <h1 className="text-3xl font-bold text-emerald-400 mb-2">👁️ Anti-Sleep Ghost Tracker</h1>
-        <p className="text-gray-400 text-xs mb-6">Aplikasi pendeteksi kantuk berbasis AI pixel tracking untuk ujian/kerja anti ngantuk.</p>
+        <h1 className="text-2xl font-bold text-orange-400 mb-1">👁️ Ghost Sayu-Eyes Tracker</h1>
+        <p className="text-zinc-500 text-xs mb-6">Mendeteksi mata menyipit atau redup sebelum kamu tertidur lelap.</p>
 
-        {/* Kotak Kamera */}
-        <div className="bg-zinc-900 border-2 border-zinc-700 p-4 rounded-2xl shadow-2xl relative inline-block">
-          <div className="absolute top-6 left-6 bg-red-600 text-[10px] px-2 py-0.5 rounded font-bold animate-pulse">LIVE</div>
-          <video ref={videoRef} autoPlay playsInline muted className="w-72 h-56 bg-black rounded-lg object-cover scale-x-[-1] mb-3 border border-zinc-800" />
-          <p className="text-xs text-amber-400 font-bold bg-black/40 py-1 rounded">{status}</p>
+        <div className="bg-zinc-900 border-2 border-zinc-700 p-4 rounded-2xl relative inline-block">
+          <video ref={videoRef} autoPlay playsInline muted className="w-72 h-54 bg-black rounded-lg object-cover scale-x-[-1] mb-2" />
+          <p className="text-xs text-yellow-400 font-bold bg-black/60 py-1 rounded px-2">{status}</p>
         </div>
 
-        {/* Pengaturan Sensitivitas (Bisa digeser biar pas deteksinya) */}
         <div className="mt-6 bg-zinc-900/60 p-4 rounded-xl border border-zinc-800">
-          <label className="text-xs text-gray-400 block mb-1">Sensitivitas Deteksi Kantuk: {sensitivity}</label>
-          <input 
-            type="range" min="30" max="90" value={sensitivity} 
-            onChange={(e) => setSensitivity(Number(e.target.value))} 
-            className="w-full accent-emerald-400"
-          />
-          <span className="text-[10px] text-zinc-500 block mt-1">*Makin kecil angkanya, makin sensitif mendeteksi mata sayu.</span>
+          <div className="flex justify-between text-xs text-zinc-400 mb-1">
+            <span>Sensitivitas Mata Sayu: {sensitivity}</span>
+            <button onClick={() => { baseBrightnessRef.current = null; setStatus("Kalibrasi Ulang Sukses! 🔄"); }} className="text-orange-400 underline text-[10px]">Set Ulang Posisi Melek</button>
+          </div>
+          <input type="range" min="10" max="50" value={sensitivity} onChange={(e) => setSensitivity(Number(e.target.value))} className="w-full accent-orange-400" />
+          <span className="text-[10px] text-zinc-500 block mt-1">*Makin kecil angkanya, makin sensitif mendeteksi mata yang menyipit sedikit.</span>
         </div>
       </div>
-
-      {/* Dekorasi Estetika ala Hacker */}
-      <div className="absolute bottom-4 left-4 text-[10px] text-zinc-600">SYSTEM_STATUS: SECURE_RUNNING_NEXTJS</div>
-      <div className="absolute bottom-4 right-4 text-[10px] text-zinc-600">ALARM_TYPE: GHOST_SOUND_ACTIVE</div>
     </div>
   );
 }
