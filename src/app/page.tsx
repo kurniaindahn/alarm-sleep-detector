@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export default function GhostSleepDetector() {
+export default function AlarmSleepDetector() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isAsleep, setIsAsleep] = useState(false);
